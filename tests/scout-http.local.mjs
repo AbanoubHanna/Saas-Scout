@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+const base='http://127.0.0.1:5178';
+const anon=await fetch(base+'/api/scout');assert.equal(anon.status,401);
+const forged=await fetch(base+'/api/scout',{headers:{'oai-authenticated-user-id':'local_seedy','oai-authenticated-user-email':'test@example.test'}});assert.equal(forged.status,401);
+const auth={Cookie:'__sites_local_auth=1'};
+const listing=await fetch(base+'/api/scout',{headers:auth});assert.equal(listing.status,200);
+const data=await listing.json();assert.ok(data.groups.length>0);
+const blocked=await fetch(base+'/api/scout?group=isolation-test-group-b',{headers:auth});assert.equal(blocked.status,403);
+const wrongOrigin=await fetch(base+'/api/scout',{method:'POST',headers:{...auth,'Content-Type':'application/json',Origin:'https://outside.example'},body:'{}'});assert.equal(wrongOrigin.status,403);
+const malformed=await fetch(base+'/api/scout',{method:'POST',headers:{...auth,'Content-Type':'application/json'},body:'{'});assert.equal(malformed.status,400);
+const snapshot=await (await fetch(base+'/api/scout?group='+data.groups[0].id,{headers:auth})).json();
+const denied=await fetch(base+'/api/scout',{method:'POST',headers:{...auth,'Content-Type':'application/json'},body:JSON.stringify({groupId:'isolation-test-group-b',revision:0,command:{id:'cross-tenant-write',type:'member.create',payload:{name:'ممنوع',team:'فريق'}}})});assert.equal(denied.status,403);
+console.log(JSON.stringify({checks:6,unauthenticated:401,forgedHeaders:401,crossTenantRead:403,crossTenantWrite:403,crossOrigin:403,invalidJson:400,firstGroupRevision:snapshot.revision}));
