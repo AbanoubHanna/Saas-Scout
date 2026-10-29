@@ -32,6 +32,7 @@ export type Plan = {
     parentId: string | null;
     goal: string;
     budget: number;
+    authorId?: string;
     yearId?: string;
     version: number;
     rootId?: string;
@@ -59,7 +60,10 @@ export type Meeting = {
 };
 export type Entry = {
     id: string;
-    kind: 'donation' | 'expense';
+    kind: 'donation' | 'expense' | 'transfer';
+    boxId?: string;
+    fromBoxId?: string;
+    toBoxId?: string;
     amount: number;
     planId: string | null;
     title: string;
@@ -70,6 +74,50 @@ export type GroupState = {
     id: string;
     name: string;
     currency: string;
+    inbox?: {
+        id: string;
+        userId: string;
+        event: string;
+        title: string;
+        targetId: string;
+        createdAt: string;
+        readAt: string | null;
+    }[];
+    notificationPreferences?: {
+        userId: string;
+        event: string;
+        enabled: boolean;
+    }[];
+    personAccounts?: {
+        userId: string;
+        memberId: string;
+        linkedBy: string;
+        linkedAt: string;
+    }[];
+    expenseRequests?: {
+        id: string;
+        boxId: string;
+        planId: string | null;
+        title: string;
+        amount: number;
+        required: {
+            userId: string;
+            role: Role;
+        }[];
+        decisions: {
+            userId: string;
+            role: Role;
+            approved: boolean;
+            at: string;
+        }[];
+        paidEntryId: string | null;
+    }[];
+    boxes?: {
+        id: string;
+        name: string;
+        unit: string | null;
+        treasurerId: string;
+    }[];
     years?: {
         id: string;
         name: string;
@@ -110,6 +158,7 @@ export type GroupState = {
         id: string;
         actor: string;
         action: string;
+        payload?: Record<string, unknown>;
         at: string;
     }[];
     processed: string[];
@@ -142,27 +191,49 @@ export class DomainError extends Error {
     status: number;
     constructor(message: string, status = 400) { super(message); this.status = status; }
 }
-const text = (p: Record<string, unknown>, key: string, max = 180) => { const s = typeof p[key] === 'string' ? (p[key] as string).trim() : ''; if (!s || s.length > max)
-    throw new DomainError(`بيانات ${key} غير صالحة`); return s; };
-const money = (v: unknown) => { if (typeof v !== 'number' || !Number.isSafeInteger(v) || v <= 0 || v > 1000000000000)
-    throw new DomainError('المبلغ يجب أن يكون عددًا صحيحًا موجبًا بالقروش'); return v; };
+const text = (p: Record<string, unknown>, key: string, max = 180) => {
+    const s = typeof p[key] === 'string' ? (p[key] as string).trim() : '';
+    if (!s || s.length > max)
+        throw new DomainError(`بيانات ${key} غير صالحة`);
+    return s;
+};
+const money = (v: unknown) => {
+    if (typeof v !== 'number' || !Number.isSafeInteger(v) || v <= 0 || v > 1000000000000)
+        throw new DomainError('المبلغ يجب أن يكون عددًا صحيحًا موجبًا بالقروش');
+    return v;
+};
 export function createGroup(id: string, name: string, leaderId: string): GroupState { return { id, name, currency: 'EGP', assignments: [{ userId: leaderId, role: 'general_leader', unit: null }], members: [], plans: [], meetings: [], entries: [], audit: [], processed: [] }; }
-export function can(s: GroupState, a: Actor, permission: string, unit: string | null = null, at = new Date().toISOString()) { if (s.delegations?.some(d => d.userId === a.userId && !d.revokedAt && d.until > at && (d.unit === null || d.unit === unit) && d.permissions.includes(permission)))
-    return true; const grants = s.assignments.filter(x => x.userId === a.userId); return grants.some(x => { if (x.role === 'general_leader')
-    return true; if (x.unit !== null && x.unit !== unit && !(x.role === 'sector_leader' && unit !== null && isWithinUnit(s, x.unit, unit)))
-    return false; const rights: Record<Role, string[]> = { general_leader: [], priest: ['read', 'approval.decide'], secretary: ['read', 'member.create', 'history.add'], sector_leader: ['read', 'plan.create', 'plan.submit', 'meeting.create', 'meeting.record'], team_leader: ['read', 'plan.create', 'plan.submit', 'meeting.create', 'meeting.record'], treasurer: ['read', 'finance.donate', 'finance.pay'], member: [] }; return rights[x.role].includes(permission); }); }
+export function can(s: GroupState, a: Actor, permission: string, unit: string | null = null, at = new Date().toISOString()) {
+    if (s.delegations?.some(d => d.userId === a.userId && !d.revokedAt && d.until > at && (d.unit === null || d.unit === unit) && d.permissions.includes(permission)))
+        return true;
+    const grants = s.assignments.filter(x => x.userId === a.userId);
+    return grants.some(x => {
+        if (x.role === 'general_leader')
+            return true;
+        if (x.unit !== null && x.unit !== unit && !(x.role === 'sector_leader' && unit !== null && isWithinUnit(s, x.unit, unit)))
+            return false;
+        const rights: Record<Role, string[]> = { general_leader: [], priest: ['read', 'approval.decide'], secretary: ['read', 'member.create', 'history.add'], sector_leader: ['read', 'plan.create', 'plan.submit', 'meeting.create', 'meeting.record', 'finance.request'], team_leader: ['read', 'plan.create', 'plan.submit', 'meeting.create', 'meeting.record', 'finance.request'], treasurer: ['read', 'finance.donate', 'finance.pay', 'finance.request'], member: [] };
+        return rights[x.role].includes(permission);
+    });
+}
 export function runCommand(previous: GroupState, a: Actor, c: Command, at: string): GroupState {
-    if (typeof c.id!=='string'||!/^[\w-]{8,80}$/.test(c.id))
+    if (typeof c.id !== 'string' || !/^[\w-]{8,80}$/.test(c.id))
         throw new DomainError('معرّف العملية غير صالح');
     if (!previous.assignments.some(x => x.userId === a.userId))
         throw new DomainError('ليس لك وصول لهذه المجموعة', 403);
     if (previous.processed.includes(c.id))
         return previous;
     const s = structuredClone(previous), p = c.payload;
-    const ensure = (permission: string, unit: string | null = null) => { if (!can(s, a, permission, unit, at))
-        throw new DomainError('ليس لديك صلاحية لهذا الإجراء ضمن الوحدة', 403); };
-    const findPlan = (id: string) => { const plan = s.plans.find(x => x.id === id); if (!plan)
-        throw new DomainError('الخطة غير موجودة', 404); return plan; };
+    const ensure = (permission: string, unit: string | null = null) => {
+        if (!can(s, a, permission, unit, at))
+            throw new DomainError('ليس لديك صلاحية لهذا الإجراء ضمن الوحدة', 403);
+    };
+    const findPlan = (id: string) => {
+        const plan = s.plans.find(x => x.id === id);
+        if (!plan)
+            throw new DomainError('الخطة غير موجودة', 404);
+        return plan;
+    };
     switch (c.type) {
         case 'delegation.grant': {
             if (!s.assignments.some(x => x.userId === a.userId && x.role === 'general_leader'))
@@ -237,11 +308,43 @@ export function runCommand(previous: GroupState, a: Actor, c: Command, at: strin
                 throw new DomainError('دور غير صالح');
             if (!s.assignments.some(x => x.userId === a.userId && x.role === 'general_leader') && (!['sector_leader', 'team_leader', 'treasurer', 'member'].includes(role) || !can(s, a, 'roles.manage', unit, at)))
                 throw new DomainError('التفويض لا يمنح حق تعيين قيادة المجموعة أو خارج وحدته', 403);
+            if (role === 'treasurer' && s.assignments.some(x => x.role === 'treasurer' && x.unit === unit))
+                throw new DomainError('لكل صندوق أمين واحد؛ تغيير الأمين يحتاج تسليمًا مسجلًا');
             if (['general_leader', 'priest', 'secretary'].includes(role) && unit !== null)
                 throw new DomainError('هذا الدور على مستوى المجموعة');
             if (s.assignments.some(x => x.userId === userId && x.role === role && x.unit === unit))
                 throw new DomainError('التكليف موجود بالفعل');
             s.assignments.push({ userId, role, unit });
+            break;
+        }
+        case 'notification.read': {
+            const item = s.inbox?.find(x => x.id === text(p, 'notificationId') && x.userId === a.userId);
+            if (!item)
+                throw new DomainError('الإشعار غير موجود', 404);
+            item.readAt ??= at;
+            break;
+        }
+        case 'notification.preference': {
+            const event = text(p, 'event');
+            if (!['plan_submitted', 'plan_approved', 'admission_final', 'history_submitted', 'history_reviewed', 'meeting_recorded', 'expense_submitted'].includes(event) || typeof p.enabled !== 'boolean')
+                throw new DomainError('إعداد إشعار غير صالح');
+            s.notificationPreferences ??= [];
+            s.notificationPreferences = s.notificationPreferences.filter(x => x.userId !== a.userId || x.event !== event);
+            s.notificationPreferences.push({ userId: a.userId, event, enabled: p.enabled });
+            break;
+        }
+        case 'account.bind': {
+            ensure('roles.manage');
+            const userId = text(p, 'userId'), memberId = text(p, 'memberId');
+            const member = s.members.find(m => m.id === memberId);
+            if (!member)
+                throw new DomainError('الفرد غير موجود');
+            s.personAccounts ??= [];
+            if (s.personAccounts.some(x => x.userId === userId || x.memberId === memberId))
+                throw new DomainError('الحساب أو الفرد مرتبط بالفعل؛ تغيير الربط يحتاج إجراء مراجعة مستقل');
+            s.personAccounts.push({ userId, memberId, linkedBy: a.userId, linkedAt: at });
+            if (!s.assignments.some(x => x.userId === userId))
+                s.assignments.push({ userId, role: 'member', unit: member.team });
             break;
         }
         case 'member.create': {
@@ -280,7 +383,9 @@ export function runCommand(previous: GroupState, a: Actor, c: Command, at: strin
                 throw new DomainError('قرار القبول يحتاج مسؤولًا مخولًا وطلبًا بعد المقابلة أو التجربة', 403);
             if (typeof p.approved !== 'boolean')
                 throw new DomainError('قرار غير صالح');
-            const note = typeof p.note === 'string' ? p.note.trim() : '';if(note.length>1000)throw new DomainError('الملاحظة أطول من المسموح');
+            const note = typeof p.note === 'string' ? p.note.trim() : '';
+            if (note.length > 1000)
+                throw new DomainError('الملاحظة أطول من المسموح');
             if (!p.approved && !note)
                 throw new DomainError('حدد سبب عدم القبول للمراجعة الداخلية');
             member.admission ??= [];
@@ -298,10 +403,11 @@ export function runCommand(previous: GroupState, a: Actor, c: Command, at: strin
             break;
         }
         case 'history.submit': {
-            ensure('history.add');
             const member = s.members.find(m => m.id === text(p, 'memberId'));
             if (!member)
                 throw new DomainError('الفرد غير موجود');
+            if (!s.personAccounts?.some(x => x.userId === a.userId && x.memberId === member.id))
+                ensure('history.add', member.team);
             const occurredAt = text(p, 'occurredAt'), precision = text(p, 'precision');
             if (!['day', 'year', 'approximate'].includes(precision) || (precision === 'year' && !/^\d{4}$/.test(occurredAt)) || (precision === 'day' && (!/^\d{4}-\d{2}-\d{2}$/.test(occurredAt) || !Number.isFinite(Date.parse(occurredAt)) || new Date(occurredAt).toISOString().slice(0, 10) !== occurredAt)))
                 throw new DomainError('حدد تاريخ الواقعة ودقته');
@@ -341,8 +447,8 @@ export function runCommand(previous: GroupState, a: Actor, c: Command, at: strin
                 throw new DomainError('السنة غير موجودة');
             if (scope !== 'general' && s.units?.length && !s.units.some(u => u.id === unit && u.kind === scope))
                 throw new DomainError('الوحدة لا تطابق مستوى الخطة');
-            const budget = p.budget===0?0:money(p.budget);
-            s.plans.push({ id: c.id, title: text(p, 'title'), scope: scope as Plan['scope'], unit, parentId, goal: text(p, 'goal', 1500), budget, yearId, version: 1, status: 'draft', required: [], decisions: [] });
+            const budget = p.budget === 0 ? 0 : money(p.budget);
+            s.plans.push({ id: c.id, title: text(p, 'title'), scope: scope as Plan['scope'], unit, parentId, goal: text(p, 'goal', 1500), budget, authorId: a.userId, yearId, version: 1, status: 'draft', required: [], decisions: [] });
             break;
         }
         case 'plan.revise': {
@@ -355,13 +461,13 @@ export function runCommand(previous: GroupState, a: Actor, c: Command, at: strin
             const rootId = original.rootId ?? original.id;
             if (s.plans.some(x => (x.rootId ?? x.id) === rootId && x.id !== original.id && ['draft', 'review'].includes(x.status)))
                 throw new DomainError('توجد نسخة مفتوحة بالفعل لهذه الخطة');
-            const budget = p.budget===0?0:money(p.budget);
+            const budget = p.budget === 0 ? 0 : money(p.budget);
             const spent = s.entries.filter(e => e.kind === 'expense' && s.plans.some(x => x.id === e.planId && (x.rootId ?? x.id) === rootId)).reduce((n, e) => n + e.amount, 0);
             if (budget < spent)
                 throw new DomainError('ميزانية النسخة الجديدة أقل من المصروف الفعلي السابق');
             if (original.status === 'review')
                 original.status = 'superseded';
-            s.plans.push({ ...original, id: c.id, rootId, previousVersionId: original.id, version: Math.max(...s.plans.filter(x => (x.rootId ?? x.id) === rootId).map(x => x.version)) + 1, title: text(p, 'title'), goal: text(p, 'goal', 1500), budget, status: 'draft', required: [], decisions: [] });
+            s.plans.push({ ...original, authorId: a.userId, id: c.id, rootId, previousVersionId: original.id, version: Math.max(...s.plans.filter(x => (x.rootId ?? x.id) === rootId).map(x => x.version)) + 1, title: text(p, 'title'), goal: text(p, 'goal', 1500), budget, status: 'draft', required: [], decisions: [] });
             break;
         }
         case 'plan.submit': {
@@ -378,9 +484,16 @@ export function runCommand(previous: GroupState, a: Actor, c: Command, at: strin
             const requiredRoles = s.settings?.planApproverRoles ?? ['priest', 'general_leader', 'team_leader', 'secretary'];
             if (!requiredRoles.every(role => required.some(v => v && typeof v === 'object' && (v as Assignment).role === role)))
                 throw new DomainError('يلزم تحديد جميع الأدوار المطلوبة في مسار الاعتماد');
-            plan.required = required.map(v => { if (!v || typeof v !== 'object')
-                throw new DomainError('معتمد غير صالح'); const r = v as Assignment; const key = `${r.userId}:${r.role}`; if (seen.has(key) || !s.assignments.some(x => x.userId === r.userId && x.role === r.role && (x.unit === null || x.unit === plan.unit)))
-                throw new DomainError('معتمد مكرر أو غير مكلف بالنطاق'); seen.add(key); return { userId: r.userId, role: r.role }; });
+            plan.required = required.map(v => {
+                if (!v || typeof v !== 'object')
+                    throw new DomainError('معتمد غير صالح');
+                const r = v as Assignment;
+                const key = `${r.userId}:${r.role}`;
+                if (seen.has(key) || !s.assignments.some(x => x.userId === r.userId && x.role === r.role && (x.unit === null || x.unit === plan.unit)))
+                    throw new DomainError('معتمد مكرر أو غير مكلف بالنطاق');
+                seen.add(key);
+                return { userId: r.userId, role: r.role };
+            });
             plan.status = 'review';
             break;
         }
@@ -441,58 +554,203 @@ export function runCommand(previous: GroupState, a: Actor, c: Command, at: strin
             member.timeline.push({ at, type: 'meeting_updated', detail: `${meeting.title}: ${attendance}${p.assessment ? ` / ${p.assessment}` : ''}` });
             break;
         }
+        case 'cashbox.create': {
+            ensure('roles.manage');
+            const unit = typeof p.unit === 'string' && p.unit.trim() ? p.unit.trim() : null;
+            const treasurerId = text(p, 'treasurerId');
+            if (unit && !s.units?.some(u => u.id === unit && ['sector', 'team'].includes(u.kind)))
+                throw new DomainError('الصندوق يتبع قطاعًا أو فريقًا صحيحًا');
+            if (!s.assignments.some(x => x.userId === treasurerId && x.role === 'treasurer' && x.unit === unit))
+                throw new DomainError('حدد أمين صندوق مكلفًا في نفس النطاق');
+            s.boxes ??= [];
+            if (s.boxes.some(b => b.unit === unit))
+                throw new DomainError('يوجد صندوق لهذه الوحدة بالفعل');
+            s.boxes.push({ id: unit ? c.id : 'central', name: text(p, 'name'), unit, treasurerId });
+            break;
+        }
+        case 'finance.transfer': {
+            const fromBoxId = text(p, 'fromBoxId'), toBoxId = text(p, 'toBoxId');
+            if (fromBoxId === toBoxId)
+                throw new DomainError('اختر صندوقين مختلفين');
+            const from = s.boxes?.find(b => b.id === fromBoxId), to = s.boxes?.find(b => b.id === toBoxId);
+            if (!from || !to)
+                throw new DomainError('الصندوق غير موجود');
+            ensure('finance.pay', from.unit);
+            const amount = money(p.amount);
+            if (cashBalance(s, from.id) < amount)
+                throw new DomainError('رصيد الصندوق المصدر غير كافٍ');
+            s.entries.push({ id: c.id, kind: 'transfer', amount, boxId: from.id, fromBoxId: from.id, toBoxId: to.id, planId: null, title: text(p, 'title'), at, actor: a.userId });
+            break;
+        }
+        case 'expense.request': {
+            const boxId = text(p, 'boxId');
+            const box = s.boxes?.find(b => b.id === boxId);
+            if (!box)
+                throw new DomainError('حدد صندوقًا مجهزًا وأمينه');
+            ensure('finance.request', box.unit);
+            const unit = s.units?.find(u => u.id === box.unit);
+            const leadRole: Role = box.unit === null ? 'general_leader' : unit?.kind === 'sector' ? 'sector_leader' : 'team_leader';
+            const leaderId = text(p, 'leaderId'), treasurerId = text(p, 'treasurerId');
+            for (const [userId, role] of [[leaderId, leadRole], [treasurerId, 'treasurer']] as [
+                string,
+                Role
+            ][]) {
+                if (!s.assignments.some(x => x.userId === userId && x.role === role && x.unit === box.unit))
+                    throw new DomainError('المعتمد غير مكلف في نفس نطاق الصندوق');
+            }
+            if (treasurerId !== box.treasurerId)
+                throw new DomainError('المعتمد المالي يجب أن يكون أمين الصندوق المعين');
+            const planId = typeof p.planId === 'string' && p.planId ? p.planId : null;
+            if (planId) {
+                const plan = findPlan(planId);
+                if (box.unit !== null && box.unit !== plan.unit)
+                    throw new DomainError('الخطة خارج نطاق الصندوق');
+            }
+            s.expenseRequests ??= [];
+            s.expenseRequests.push({ id: c.id, boxId, planId, title: text(p, 'title'), amount: money(p.amount), required: [{ userId: leaderId, role: leadRole }, { userId: treasurerId, role: 'treasurer' }], decisions: [], paidEntryId: null });
+            break;
+        }
+        case 'expense.decide': {
+            const item = s.expenseRequests?.find(x => x.id === text(p, 'requestId'));
+            const role = text(p, 'role') as Role;
+            const box = s.boxes?.find(b => b.id === item?.boxId);
+            if (!item || !box || item.paidEntryId || !item.required.some(x => x.userId === a.userId && x.role === role) || !s.assignments.some(x => x.userId === a.userId && x.role === role && x.unit === box.unit))
+                throw new DomainError('لست معتمدًا مكلفًا لهذا المصروف', 403);
+            if (item.decisions.some(x => x.userId === a.userId && x.role === role))
+                throw new DomainError('القرار مسجل بالفعل؛ أنشئ طلبًا جديدًا للتعديل');
+            if (typeof p.approved !== 'boolean')
+                throw new DomainError('قرار غير صالح');
+            item.decisions.push({ userId: a.userId, role, approved: p.approved, at });
+            break;
+        }
+        case 'finance.pay_request': {
+            const item = s.expenseRequests?.find(x => x.id === text(p, 'requestId'));
+            const box = s.boxes?.find(b => b.id === item?.boxId);
+            if (!item || !box || item.paidEntryId)
+                throw new DomainError('طلب المصروف غير متاح للدفع');
+            ensure('finance.pay', box.unit);
+            if (!item.required.every(r => item.decisions.some(d => d.userId === r.userId && d.role === r.role && d.approved)))
+                throw new DomainError('يلزم اعتماد المسؤول وأمين الصندوق معًا');
+            if (cashBalance(s, box.id) < item.amount)
+                throw new DomainError('رصيد الصندوق غير كافٍ');
+            s.entries.push({ id: c.id, kind: 'expense', boxId: box.id, planId: item.planId, title: item.title, amount: item.amount, at, actor: a.userId });
+            item.paidEntryId = c.id;
+            break;
+        }
         case 'finance.donate': {
-            ensure('finance.donate');
-            s.entries.push({ id: c.id, kind: 'donation', amount: money(p.amount), planId: null, title: text(p, 'title'), at, actor: a.userId });
+            const boxId = typeof p.boxId === 'string' && p.boxId ? p.boxId : 'central';
+            const box = s.boxes?.find(b => b.id === boxId);
+            if (boxId !== 'central' && !box)
+                throw new DomainError('الصندوق غير موجود');
+            ensure('finance.donate', box?.unit ?? null);
+            s.entries.push({ id: c.id, kind: 'donation', boxId, amount: money(p.amount), planId: null, title: text(p, 'title'), at, actor: a.userId });
             break;
         }
         case 'finance.pay': {
             const plan = findPlan(text(p, 'planId'));
+            const boxId = typeof p.boxId === 'string' && p.boxId ? p.boxId : 'central';
+            const box = s.boxes?.find(b => b.id === boxId);
+            if (boxId !== 'central' && !box)
+                throw new DomainError('الصندوق غير موجود');
+            ensure('finance.pay', box?.unit ?? null);
             ensure('finance.pay', plan.unit);
+            if (box?.unit !== undefined && box.unit !== null && box.unit !== plan.unit)
+                throw new DomainError('صندوق الوحدة لا يصرف على خطة وحدة أخرى');
             const amount = money(p.amount);
             const rootId = plan.rootId ?? plan.id;
             const spent = s.entries.filter(x => x.kind === 'expense' && s.plans.some(v => v.id === x.planId && (v.rootId ?? v.id) === rootId)).reduce((n, x) => n + x.amount, 0);
-            const balance = s.entries.reduce((n, x) => n + (x.kind === 'donation' ? x.amount : -x.amount), 0);
+            const balance = cashBalance(s, boxId);
             if (plan.status !== 'approved' || spent + amount > plan.budget)
                 throw new DomainError('الصرف يحتاج ميزانية معتمدة ورصيدًا كافيًا في البند');
             if (balance < amount)
                 throw new DomainError('رصيد الصندوق غير كافٍ');
-            s.entries.push({ id: c.id, kind: 'expense', amount, planId: plan.id, title: text(p, 'title'), at, actor: a.userId });
+            s.entries.push({ id: c.id, kind: 'expense', boxId, amount, planId: plan.id, title: text(p, 'title'), at, actor: a.userId });
             break;
         }
         default: throw new DomainError('الإجراء غير مدعوم');
     }
+    const announce = (users: string[], event: string, title: string, targetId: string) => { s.inbox ??= []; for (const userId of new Set(users)) {
+        if (!s.assignments.some(x => x.userId === userId) || s.notificationPreferences?.some(x => x.userId === userId && x.event === event && !x.enabled))
+            continue;
+        const id = c.id + ':' + userId;
+        if (s.inbox.some(x => x.id === id))
+            continue;
+        s.inbox.push({ id, userId, event, title, targetId, createdAt: at, readAt: null });
+    } };
+    if (c.type === 'plan.submit') {
+        const plan = s.plans.find(x => x.id === p.planId)!;
+        announce(plan.required.map(x => x.userId), 'plan_submitted', 'خطة تحتاج مراجعتك: ' + plan.title, plan.id);
+    }
+    if (c.type === 'approval.decide') {
+        const plan = s.plans.find(x => x.id === p.planId)!;
+        if (plan.status === 'approved' && plan.authorId)
+            announce([plan.authorId], 'plan_approved', 'اكتمل اعتماد الخطة: ' + plan.title, plan.id);
+    }
+    if (c.type === 'history.submit')
+        announce(s.assignments.filter(x => x.role === 'secretary' && x.unit === null).map(x => x.userId), 'history_submitted', 'واقعة تاريخية تحتاج مراجعة السكرتارية', c.id);
+    if (c.type === 'history.review') {
+        const claim = s.claims?.find(x => x.id === p.claimId);
+        if (claim)
+            announce([claim.submittedBy], 'history_reviewed', 'تمت مراجعة واقعتك التاريخية: ' + claim.title, claim.id);
+    }
+    if (c.type === 'expense.request') {
+        const item = s.expenseRequests?.find(x => x.id === c.id);
+        if (item)
+            announce(item.required.map(x => x.userId), 'expense_submitted', 'مصروف يحتاج قرارك: ' + item.title, item.id);
+    }
+    if (c.type === 'admission.decide') {
+        const member = s.members.find(x => x.id === p.memberId);
+        if (member && ['active', 'rejected'].includes(member.status))
+            announce((s.personAccounts ?? []).filter(x => x.memberId === member.id).map(x => x.userId), 'admission_final', member.status === 'active' ? 'تم قبول انضمامك للمجموعة' : 'صدر قرار عدم قبول طلب الانضمام', member.id);
+    }
+    if (c.type === 'meeting.record')
+        announce((s.personAccounts ?? []).filter(x => x.memberId === p.memberId).map(x => x.userId), 'meeting_recorded', 'تم تحديث حضورك وتقييمك في الاجتماع', String(p.meetingId));
     for (const member of s.members) {
         const latest = s.memberships?.filter(m => m.memberId === member.id).at(-1);
         if (latest)
             latest.status = member.status;
     }
-    s.audit.push({ id: c.id, actor: a.userId, action: c.type, at });
+    s.audit.push({ id: c.id, actor: a.userId, action: c.type, payload: structuredClone(c.payload), at });
     s.processed.push(c.id);
     return s;
 }
 export function groupReport(s: GroupState) { return { members: s.members.length, plannedMeetings: s.meetings.length, executedMeetings: s.meetings.filter(m => m.executedAt).length, income: s.entries.filter(e => e.kind === 'donation').reduce((n, e) => n + e.amount, 0), expenses: s.entries.filter(e => e.kind === 'expense').reduce((n, e) => n + e.amount, 0) }; }
 /** A server-side projection. Never rely on hidden UI controls to protect tenant data. */
-export function isWithinUnit(s: GroupState, ancestor: string, target: string): boolean { let current: string | null = target; const seen = new Set<string>(); while (current && !seen.has(current)) {
-    if (current === ancestor)
-        return true;
-    seen.add(current);
-    current = s.units?.find(u => u.id === current)?.parentId ?? null;
-} return false; }
+export function isWithinUnit(s: GroupState, ancestor: string, target: string): boolean {
+    let current: string | null = target;
+    const seen = new Set<string>();
+    while (current && !seen.has(current)) {
+        if (current === ancestor)
+            return true;
+        seen.add(current);
+        current = s.units?.find(u => u.id === current)?.parentId ?? null;
+    }
+    return false;
+}
 export function projectGroup(s: GroupState, a: Actor): GroupState {
     const assigned = s.assignments.filter(x => x.userId === a.userId);
     if (!assigned.length)
         throw new DomainError('ليس لك وصول لهذه المجموعة', 403);
     if (assigned.some(x => x.role === 'general_leader'))
-        return s;
+        return { ...s, inbox: s.inbox?.filter(x => x.userId === a.userId), notificationPreferences: s.notificationPreferences?.filter(x => x.userId === a.userId) };
     if (assigned.every(x => x.role === 'member'))
-        throw new DomainError('واجهة الفرد وربط حسابه بالملف لم تكتمل بعد', 403);
+        throw new DomainError('واجهة الفرد متاحة في /me بعد ربط الحساب بالملف', 403);
     const roles = assigned.map(x => x.role), globalSecretary = assigned.some(x => x.role === 'secretary' && x.unit === null), priest = roles.includes('priest');
     const globalFinance = assigned.some(x => x.role === 'treasurer' && x.unit === null);
     const units = assigned.filter(x => ['team_leader', 'sector_leader'].includes(x.role)).map(x => x.unit);
     const operates = (unit: string | null) => units.includes(null) || unit !== null && units.includes(unit) || assigned.some(x => x.role === 'sector_leader' && x.unit !== null && unit !== null && isWithinUnit(s, x.unit, unit));
-    const plans = s.plans.filter(p => globalSecretary || priest || globalFinance || operates(p.unit) || p.required.some(r => r.userId === a.userId) || (p.scope === 'general' && p.status === 'approved'));
+    const financeScope = (unit: string | null) => assigned.some(x => x.role === 'treasurer' && (x.unit === null || x.unit === unit));
+    const visibleBoxes = s.boxes?.filter(b => financeScope(b.unit) || operates(b.unit));
+    const visibleBoxIds = new Set(s.boxes?.filter(b => financeScope(b.unit)).map(b => b.id) ?? []);
+    if (globalFinance)
+        visibleBoxIds.add('central');
+    const plans = s.plans.filter(p => globalSecretary || priest || globalFinance || financeScope(p.unit) || operates(p.unit) || p.required.some(r => r.userId === a.userId) || (p.scope === 'general' && p.status === 'approved'));
     const meetings = s.meetings.filter(m => { const p = s.plans.find(p => p.id === m.planId); return p && operates(p.unit); });
     const members = s.members.filter(m => globalSecretary || priest || operates(m.team));
-    return { ...s, memberships: s.memberships?.filter(m => members.some(person => person.id === m.memberId)), units: s.units?.filter(u => globalSecretary || priest || globalFinance || operates(u.id) || u.kind === 'sector'), plans, members: members.map(m => ({ ...m, timeline: globalSecretary || operates(m.team) ? m.timeline : [], admission: globalSecretary || priest ? m.admission : undefined })), meetings, entries: globalFinance ? s.entries : [], assignments: s.assignments.filter(x => x.userId === a.userId || x.unit === null || units.includes(x.unit)), claims: globalSecretary ? s.claims : [], notifications: [], delegations: s.delegations?.filter(d => d.userId === a.userId), audit: s.audit.filter(x => x.actor === a.userId), processed: [] };
+    return { id: s.id, name: s.name, currency: s.currency, inbox: s.inbox?.filter(x => x.userId === a.userId), notificationPreferences: s.notificationPreferences?.filter(x => x.userId === a.userId), settings: s.settings, years: s.years, expenseRequests: s.expenseRequests?.filter(r => financeScope(s.boxes?.find(b => b.id === r.boxId)?.unit ?? null) || r.required.some(x => x.userId === a.userId)), boxes: visibleBoxes ?? [], memberships: s.memberships?.filter(m => members.some(person => person.id === m.memberId)), units: s.units?.filter(u => globalSecretary || priest || globalFinance || operates(u.id) || u.kind === 'sector'), plans, members: members.map(m => ({ ...m, timeline: globalSecretary || operates(m.team) ? m.timeline : [], admission: globalSecretary || priest ? m.admission : undefined })), meetings, entries: globalFinance ? s.entries : s.entries.filter(e => e.kind === 'transfer' ? visibleBoxIds.has(e.fromBoxId ?? '') || visibleBoxIds.has(e.toBoxId ?? '') : visibleBoxIds.has(e.boxId ?? 'central')), assignments: s.assignments.filter(x => x.userId === a.userId || x.unit === null || units.includes(x.unit)), claims: globalSecretary ? s.claims : [], notifications: [], delegations: s.delegations?.filter(d => d.userId === a.userId), audit: s.audit.filter(x => x.actor === a.userId), processed: [] };
 }
+export function cashBalance(s: GroupState, boxId?: string): number { return s.entries.reduce((balance, e) => { if (e.kind === 'transfer')
+    return boxId ? balance + (e.toBoxId === boxId ? e.amount : 0) - (e.fromBoxId === boxId ? e.amount : 0) : balance; if (boxId && (e.boxId ?? 'central') !== boxId)
+    return balance; return balance + (e.kind === 'donation' ? e.amount : -e.amount); }, 0); }
+export function individualProfile(s: GroupState, a: Actor) { const binding = s.personAccounts?.find(x => x.userId === a.userId); const member = s.members.find(m => m.id === binding?.memberId); if (!binding || !member || !s.assignments.some(x => x.userId === a.userId))
+    throw new DomainError('حسابك غير مربوط بملف فرد في هذه المجموعة', 403); const visibleMember = { id: member.id, name: member.name, team: member.team, status: member.status, timeline: member.timeline.filter(t => t.type !== 'admission_decision') }; return { groupName: s.name, inbox: s.inbox?.filter(x => x.userId === a.userId) ?? [], member: visibleMember, plans: s.plans.filter(p => p.status === 'approved' && (p.scope === 'general' || (p.unit !== null && isWithinUnit(s, p.unit, member.team)))).map(p => ({ id: p.id, title: p.title, goal: p.goal })), meetings: s.meetings.filter(m => s.plans.some(p => p.id === m.planId && (p.scope === 'general' || (p.unit !== null && isWithinUnit(s, p.unit, member.team))))).map(m => ({ id: m.id, title: m.title, date: m.date, attendance: m.attendance[member.id] ?? null, assessment: m.assessments[member.id] ?? 'not_evaluated' })), claims: (s.claims ?? []).filter(c => c.memberId === member.id).map(c => ({ id: c.id, title: c.title, occurredAt: c.occurredAt, precision: c.precision, source: c.source, status: c.status, recordedAt: c.recordedAt })) }; }

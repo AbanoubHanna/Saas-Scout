@@ -2,10 +2,14 @@ import { and, eq, sql } from 'drizzle-orm';
 import { getDb } from '../../../db';
 import { platformOperators, scoutGroups, groupAccounts, trialRequests } from '../../../db/schema';
 import { getChatGPTUser } from '../../chatgpt-auth';
-import { createGroup, runCommand, DomainError, groupReport, projectGroup, type GroupState, type Command } from '../../../lib/scout/core';
+import { createGroup, runCommand, DomainError, groupReport, projectGroup, individualProfile, type GroupState, type Command } from '../../../lib/scout/core';
 const response = (data: unknown, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
-async function identity() { const user = await getChatGPTUser(); if (!user)
-    throw new DomainError('سجّل الدخول أولًا', 401); return user; }
+async function identity() {
+    const user = await getChatGPTUser();
+    if (!user)
+        throw new DomainError('سجّل الدخول أولًا', 401);
+    return user;
+}
 async function operator(userId: string) { const rows = await getDb().select().from(platformOperators).where(eq(platformOperators.userId, userId)).limit(1); return rows.length > 0; }
 export async function GET(request: Request) {
     try {
@@ -24,6 +28,8 @@ export async function GET(request: Request) {
         const state = JSON.parse(row.state) as GroupState;
         if (!state.assignments.some(a => a.userId === user.userId))
             throw new DomainError('ليس لك وصول لهذه المجموعة', 403);
+        if (new URL(request.url).searchParams.get('view') === 'me')
+            return response({ profile: individualProfile(state, { userId: user.userId }), revision: row.revision });
         const projected = projectGroup(state, { userId: user.userId });
         return response({ state: projected, revision: row.revision, report: groupReport(projected) });
     }
@@ -40,7 +46,10 @@ export async function POST(request: Request) {
         const raw = await request.text();
         if (raw.length > 30000)
             throw new DomainError('طلب أكبر من المسموح', 413);
-        const parsed:unknown=JSON.parse(raw);if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new DomainError('بيانات غير صالحة');const input=parsed as Record<string,unknown>;
+        const parsed: unknown = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+            throw new DomainError('بيانات غير صالحة');
+        const input = parsed as Record<string, unknown>;
         const db = getDb();
         if (input.type === 'group.create') {
             if (!await operator(user.userId))
@@ -61,14 +70,14 @@ export async function POST(request: Request) {
         }
         const groupId = typeof input.groupId === 'string' ? input.groupId : '';
         const revision = input.revision;
-        if (!groupId || (!Number.isSafeInteger(revision)||Number(revision)<0))
+        if (!groupId || (!Number.isSafeInteger(revision) || Number(revision) < 0))
             throw new DomainError('مجموعة أو إصدار غير صالح');
         const [row] = await db.select().from(scoutGroups).where(eq(scoutGroups.id, groupId)).limit(1);
         if (!row)
             throw new DomainError('المجموعة غير موجودة', 404);
         const previous = JSON.parse(row.state) as GroupState;
         const command = input.command as Command;
-        if (!command || typeof command.type !== 'string' || !command.payload || typeof command.payload !== 'object'||Array.isArray(command.payload))
+        if (!command || typeof command.type !== 'string' || !command.payload || typeof command.payload !== 'object' || Array.isArray(command.payload))
             throw new DomainError('إجراء غير صالح');
         const next = runCommand(previous, { userId: user.userId }, command, new Date().toISOString());
         if (next === previous)
@@ -84,6 +93,11 @@ export async function POST(request: Request) {
         return failure(error);
     }
 }
-function failure(error: unknown) { if (error instanceof DomainError)
-    return response({ error: error.message }, error.status); if (error instanceof SyntaxError)
-    return response({ error: 'بيانات غير صالحة' }, 400); console.error('Scout operation failed'); return response({ error: 'تعذر إتمام العملية. لم نؤكد حفظها.' }, 500); }
+function failure(error: unknown) {
+    if (error instanceof DomainError)
+        return response({ error: error.message }, error.status);
+    if (error instanceof SyntaxError)
+        return response({ error: 'بيانات غير صالحة' }, 400);
+    console.error('Scout operation failed');
+    return response({ error: 'تعذر إتمام العملية. لم نؤكد حفظها.' }, 500);
+}
