@@ -1,0 +1,2 @@
+import {integer,sqliteTable,text} from 'drizzle-orm/sqlite-core';
+export const trialRequests=sqliteTable('trial_requests',{id:text('id').primaryKey(),groupName:text('group_name').notNull(),church:text('church').notNull(),leaderName:text('leader_name').notNull(),country:text('country').notNull(),phone:text('phone').notNull(),email:text('email'),members:text('members'),notes:text('notes'),consent:integer('consent',{mode:'boolean'}).notNull(),clientHash:text('client_hash').notNull(),createdAt:text('created_at').notNull()});

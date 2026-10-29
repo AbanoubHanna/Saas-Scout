@@ -1,0 +1,15 @@
+import {and,count,eq,gte} from 'drizzle-orm';
+import {getDb} from '../../../db';
+import {trialRequests} from '../../../db/schema';
+const countries=new Set(['EG','SA','AE','JO','LB','PS','SY','IQ','KW','QA','BH','OM','YE','SD','LY','TN','DZ','MA','MR','SO','DJ','KM']);
+const reply=(message:string,status:number)=>Response.json({message},{status,headers:{'Cache-Control':'no-store'}});
+export async function POST(request:Request){
+const origin=request.headers.get('origin');if(origin&&origin!==new URL(request.url).origin)return reply('طلب غير مسموح.',403);
+if(!request.headers.get('content-type')?.includes('application/json'))return reply('صيغة طلب غير صالحة.',415);
+if(Number(request.headers.get('content-length')||0)>12000)return reply('حجم الطلب أكبر من المسموح.',413);
+try{const raw=await request.text();if(raw.length>12000)return reply('حجم الطلب أكبر من المسموح.',413);const value:unknown=JSON.parse(raw);if(!value||typeof value!=='object'||Array.isArray(value))return reply('بيانات غير صالحة.',400);const input=value as Record<string,unknown>;const field=(k:string)=>typeof input[k]==='string'?(input[k] as string).trim():'';if(field('website'))return reply('تعذر تسجيل الطلب.',400);
+const id=field('id'),groupName=field('groupName'),church=field('church'),leaderName=field('leaderName'),country=field('country'),phone=field('phone'),email=field('email'),members=field('members'),notes=field('notes');
+if(!/^[0-9a-f-]{36}$/i.test(id)||groupName.length<2||groupName.length>120||church.length<2||church.length>160||leaderName.length<2||leaderName.length>100||!countries.has(country)||!/^\+[1-9]\d{7,14}$/.test(phone)||email.length>180||(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))||members.length>60||notes.length>1200||input.consent!==true)return reply('راجع البيانات المطلوبة ورقم الواتساب والموافقة على التواصل.',400);
+const now=new Date();const remote=request.headers.get('cf-connecting-ip')||'unknown';const hash=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(`${remote}:${now.toISOString().slice(0,10)}`));const clientHash=Array.from(new Uint8Array(hash),x=>x.toString(16).padStart(2,'0')).join('');const db=getDb();const[existing]=await db.select({id:trialRequests.id}).from(trialRequests).where(eq(trialRequests.id,id)).limit(1);if(existing)return reply('تم استلام الطلب.',200);const[daily]=await db.select({total:count()}).from(trialRequests).where(and(eq(trialRequests.clientHash,clientHash),gte(trialRequests.createdAt,`${now.toISOString().slice(0,10)}T00:00:00.000Z`)));if(daily.total>=8)return reply('وصلت للحد اليومي من الطلبات. حاول لاحقًا.',429);
+await db.insert(trialRequests).values({id,groupName,church,leaderName,country,phone,email:email||null,members:members||null,notes:notes||null,consent:true,clientHash,createdAt:now.toISOString()}).onConflictDoNothing({target:trialRequests.id});return reply('تم استلام طلب التجربة.',201);
+}catch(error){if(error instanceof SyntaxError)return reply('صيغة بيانات غير صالحة.',400);console.error('Trial request storage unavailable');return reply('تعذر حفظ الطلب حاليًا. حاول مرة أخرى، بياناتك لم تُمسح من النموذج.',503);}}
