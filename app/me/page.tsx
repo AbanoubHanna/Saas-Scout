@@ -1,8 +1,8 @@
-import {requireScoutUser as requireChatGPTUser,assertTestScope} from '../../lib/scout/scout-auth';
-import LogoutLink from '../logout-link';
+import AppShell from "../app-shell";
+import {requireScoutUser as requireChatGPTUser} from '../../lib/scout/scout-auth';
 import MobileShell from '../mobile-shell';
 import { chatGPTSignOutPath } from '../chatgpt-auth';
 import Individual from './profile';
 import '../console/workspace.css';
 export const dynamic = 'force-dynamic';
-export default async function Page() { const user = await requireChatGPTUser('/me'); return <main className="workspace" dir="rtl"><MobileShell /><header className="workspace-header"><a href="/">مرقوريوس</a><span>{user.displayName}</span><LogoutLink href={chatGPTSignOutPath()}/></header><Individual userId={user.userId}/></main>; }
+export default async function Page() { const user = await requireChatGPTUser('/me'); return <AppShell section="member" name={user.displayName} signOut={chatGPTSignOutPath()}><MobileShell /><Individual userId={user.userId}/></AppShell>; }

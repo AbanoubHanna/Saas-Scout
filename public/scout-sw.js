@@ -1,5 +1,5 @@
 // Cache only the generic offline application and its static font/script. Never cache authenticated HTML, API responses, rosters or credentials here.
-const OFFLINE_CACHE='scout-safe-offline-v3';
+const OFFLINE_CACHE='scout-safe-offline-v4';
 const SAFE_ASSETS=['/scout-offline.html','/scout-offline.js','/assets/cairo-arabic.woff2'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(OFFLINE_CACHE).then(cache=>cache.addAll(SAFE_ASSETS)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',event=>event.waitUntil(self.clients.claim()));

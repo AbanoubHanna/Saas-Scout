@@ -1,3 +1,4 @@
-import {requireScoutUser as requireChatGPTUser,assertTestScope} from '../../lib/scout/scout-auth';
+import AppShell from "../app-shell";
+import {requireScoutUser as requireChatGPTUser} from '../../lib/scout/scout-auth';
 import Panel from './panel';import '../console/workspace.css';
-export const dynamic='force-dynamic';export default async function Page(){const user=await requireChatGPTUser('/platform');return <main className="workspace"><header className="workspace-header"><a href="/">مرقوريوس</a><span>إدارة المنصة</span><a href="/console">مساحة المجموعة</a></header><Panel userId={user.userId}/></main>;}
+export const dynamic='force-dynamic';export default async function Page(){const user=await requireChatGPTUser('/platform');return <AppShell section="platform" name={user.displayName}><Panel userId={user.userId}/></AppShell>;}
