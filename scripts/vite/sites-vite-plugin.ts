@@ -8,6 +8,7 @@ import type { Plugin } from "vite";
 const localUserId = "local_seedy";
 const localEmail = "seedy@sites.test";
 const localFullName = "Seedy";
+const testIdentities: Record<string,{id:string;email:string;name:string}> = Object.fromEntries(['priest','secretary','leader','keeper','curriculum','sector','examiner','cashier','individual','other'].map(name=>[name,{id:'local_'+name,email:name+'@sites.test',name:'اختبار '+name}]));
 const localCookieName = "__sites_local_auth";
 const localHosts = new Set(["localhost", "127.0.0.1", "::1"]);
 const localAddresses = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
@@ -105,13 +106,14 @@ export function sites({ mockAuth = true } = {}): Plugin {
         const signIn = url.pathname === "/signin-with-chatgpt";
         const signOut = url.pathname === "/signout-with-chatgpt";
         if (!signIn && !signOut) {
-          if (signInCookies.length === 1 && signInCookies[0] === "1") {
-            setHeader(request, "oai-authenticated-user-id", localUserId);
-            setHeader(request, "oai-authenticated-user-email", localEmail);
+          const identity=signInCookies[0]==="1"?{id:localUserId,email:localEmail,name:localFullName}:testIdentities[signInCookies[0]];
+          if (signInCookies.length === 1 && identity) {
+            setHeader(request, "oai-authenticated-user-id", identity.id);
+            setHeader(request, "oai-authenticated-user-email", identity.email);
             setHeader(
               request,
               "oai-authenticated-user-full-name",
-              localFullName,
+              encodeURIComponent(identity.name),
             );
             setHeader(
               request,

@@ -15,6 +15,20 @@
       "when": 1793300624664,
       "tag": "0001_handy_thunderbolt",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1793360088484,
+      "tag": "0002_low_toad",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1793360722304,
+      "tag": "0003_careful_mesmero",
+      "breakpoints": true
     }
   ]
 }

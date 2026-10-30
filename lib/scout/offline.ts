@@ -1,5 +1,6 @@
 import type { Command } from './core';
 export type PendingRecord = {
+    signature?:string;
     id: string;
     userId: string;
     groupId: string;
@@ -32,3 +33,5 @@ export async function removePending(id: string) { const db = await open(); try {
 finally {
     db.close();
 } }
+
+export async function storeOfflinePack(pack:unknown){const db=await new Promise<IDBDatabase>((resolve,reject)=>{const request=indexedDB.open('scout-offline-packs-v1',1);request.onupgradeneeded=()=>request.result.createObjectStore('packs',{keyPath:'id'});request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});try{await new Promise<void>((resolve,reject)=>{const transaction=db.transaction('packs','readwrite');transaction.objectStore('packs').put(pack);transaction.oncomplete=()=>resolve();transaction.onerror=()=>reject(transaction.error);});}finally{db.close();}}
