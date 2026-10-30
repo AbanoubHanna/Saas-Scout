@@ -1,6 +1,7 @@
+import {requireScoutUser as requireChatGPTUser,assertTestScope} from '../../lib/scout/scout-auth';
 import LogoutLink from '../logout-link';
 import MobileShell from '../mobile-shell';
-import { requireChatGPTUser, chatGPTSignOutPath } from '../chatgpt-auth';
+import { chatGPTSignOutPath } from '../chatgpt-auth';
 import Individual from './profile';
 import '../console/workspace.css';
 export const dynamic = 'force-dynamic';

@@ -1,4 +1,5 @@
-import {eq} from 'drizzle-orm';import {getDb} from '../../../db';import {scoutGroups,scoutSubscriptions,scoutSupportLog,trialRequests} from '../../../db/schema';import {getChatGPTUser} from '../../chatgpt-auth';import {isPlatformOperator} from '../../../lib/scout/server-auth';import {DomainError} from '../../../lib/scout/core';
+import {getScoutUser as getChatGPTUser,assertTestScope} from '../../../lib/scout/scout-auth';
+import {eq} from 'drizzle-orm';import {getDb} from '../../../db';import {scoutGroups,scoutSubscriptions,scoutSupportLog,trialRequests} from '../../../db/schema';import {isPlatformOperator} from '../../../lib/scout/server-auth';import {DomainError} from '../../../lib/scout/core';
 const json=(data:unknown,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store'}});
 async function owner(){const user=await getChatGPTUser();if(!user)throw new DomainError('سجل الدخول',401);if(!await isPlatformOperator(user.userId))throw new DomainError('هذا القسم لإدارة المنصة فقط',403);return user;}
 const fail=(e:unknown)=>json({error:e instanceof DomainError?e.message:'تعذر إتمام الطلب'},e instanceof DomainError?e.status:500);

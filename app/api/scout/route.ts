@@ -1,10 +1,11 @@
+import {getScoutUser as getChatGPTUser,assertTestScope} from '../../../lib/scout/scout-auth';
 import {supportProjection} from '../../../lib/scout/governance';
 import {loadGroupState,saveGroupState,fingerprint} from '../../../lib/scout/storage';
 import {isPlatformOperator as operator} from '../../../lib/scout/server-auth';
 import { and, eq, sql } from 'drizzle-orm';
 import { getDb } from '../../../db';
 import { platformOperators, scoutGroups, groupAccounts, trialRequests,scoutFiles,scoutCommands,scoutSupportLog,scoutSubscriptions } from '../../../db/schema';
-import { getChatGPTUser } from '../../chatgpt-auth';
+
 import { createGroup, runCommand, DomainError, groupReport, projectGroup, individualProfile,can,isWithinUnit, type GroupState, type Command } from '../../../lib/scout/core';
 const response = (data: unknown, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
 async function identity() {
@@ -27,7 +28,7 @@ export async function GET(request: Request) {
         const [row] = await db.select().from(scoutGroups).where(eq(scoutGroups.id, groupId)).limit(1);
         if (!row)
             throw new DomainError('المجموعة غير موجودة', 404);
-        const state = await loadGroupState(row);
+        const state = await loadGroupState(row);assertTestScope(user,state);
         if (!state.assignments.some(a => a.userId === user.userId)){if(!isOperator)throw new DomainError('ليس لك وصول لهذه المجموعة',403);const support=supportProjection(state,user.userId,new Date().toISOString());for(const grant of support.grants)await db.insert(scoutSupportLog).values({id:crypto.randomUUID(),groupId,grantId:grant.id,operatorId:user.userId,scope:grant.scope,at:new Date().toISOString()});return response({support});}
         const [subscription]=await db.select().from(scoutSubscriptions).where(eq(scoutSubscriptions.groupId,groupId)).limit(1);if(subscription?.status==='suspended')throw new DomainError('مساحة المجموعة موقوفة؛ تواصل مع مفوض الاشتراك',403);
         if(new URL(request.url).searchParams.get('view')==='offline'){const actor={userId:user.userId};const meetings=state.meetings.filter(m=>{const p=state.plans.find(p=>p.id===m.planId);return p&&can(state,actor,'meeting.record',p.unit);});if(!meetings.length)throw new DomainError('لا توجد اجتماعات مصرح بها للحفظ دون اتصال',403);const units=meetings.map(m=>state.plans.find(p=>p.id===m.planId)!);const members=state.members.filter(m=>['active','trial','discussion'].includes(m.status)&&units.some(p=>p.scope==='general'||p.unit===m.team||(p.scope==='sector'&&p.unit!==null&&isWithinUnit(state,p.unit,m.team))));return response({pack:{id:user.userId+':'+state.id,userId:user.userId,groupId:state.id,name:state.name,revision:row.revision,expiresAt:new Date(Date.now()+86400000).toISOString(),members:members.map(m=>({id:m.id,name:m.name,team:m.team})),meetings:meetings.map(m=>({id:m.id,title:m.title,date:m.date,attendance:Object.fromEntries(Object.entries(m.attendance).filter(([id])=>members.some(x=>x.id===id))),assessments:Object.fromEntries(Object.entries(m.assessments).filter(([id])=>members.some(x=>x.id===id))),lessonId:state.operations?.items.find(i=>i.id===m.itemId)?.lessonId??null})),deliveries:state.operations?.deliveries.filter(d=>meetings.some(m=>m.id===d.meetingId))??[],assessments:state.operations?.assessments.filter(a=>members.some(m=>m.id===a.memberId)&&meetings.some(m=>m.id===a.meetingId))??[]}});}
@@ -79,7 +80,7 @@ export async function POST(request: Request) {
         if (!row)
             throw new DomainError('المجموعة غير موجودة', 404);
         const [subscription]=await db.select().from(scoutSubscriptions).where(eq(scoutSubscriptions.groupId,groupId)).limit(1);if(subscription?.status==='suspended')throw new DomainError('المجموعة موقوفة',403);
-        const previous = await loadGroupState(row);
+        const previous = await loadGroupState(row);assertTestScope(user,previous);
         const command = input.command as Command;
         if (!command || typeof command.type !== 'string' || !command.payload || typeof command.payload !== 'object' || Array.isArray(command.payload))
             throw new DomainError('إجراء غير صالح');
