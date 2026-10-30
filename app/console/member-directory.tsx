@@ -1,0 +1,10 @@
+'use client';
+import {useState} from 'react';
+import type {Member} from '../../lib/scout/core';
+import StatusBadge from './status-badge';
+export default function MemberDirectory({members,units}:{members:Member[];units?:{id:string;name:string}[]}){
+ const [query,setQuery]=useState(''),[status,setStatus]=useState(''),[limit,setLimit]=useState(30);
+ const name=(id:string)=>units?.find(u=>u.id===id)?.name??id;
+ const filtered=members.filter(m=>(!status||m.status===status)&&(!query.trim()||(m.name+' '+name(m.team)).toLocaleLowerCase('ar').includes(query.trim().toLocaleLowerCase('ar'))));
+ return <div className="member-directory"><h3>دليل الأفراد</h3><div className="directory-filters"><label>ابحث عن فرد أو فريق<input type="search" value={query} onChange={e=>{setQuery(e.target.value);setLimit(30);}} placeholder="اكتب الاسم أو اسم الفريق"/></label><label>حالة العضوية<select value={status} onChange={e=>{setStatus(e.target.value);setLimit(30);}}><option value="">كل الحالات</option><option value="applicant">طلبات الانضمام</option><option value="trial">فترة التجربة</option><option value="active">الأعضاء المقبولون</option><option value="discussion">للمناقشة</option><option value="rejected">مرفوض</option></select></label></div><p role="status">{filtered.length} فرد مطابق من {members.length} ملف متاح لحسابك</p>{filtered.slice(0,limit).map(m=><details key={m.id} className="member-record"><summary><span className="person-initial" aria-hidden="true">{m.name.trim().slice(0,1)}</span><span className="person-name"><strong>{m.name}</strong><small>{name(m.team)}</small></span><StatusBadge value={m.status}/></summary><div className="person-timeline"><h4>السجل الزمني</h4>{m.timeline.length?m.timeline.map((t,i)=><p key={i}><time dateTime={t.at}>{new Date(t.at).toLocaleDateString('ar-EG')}</time><span>{t.detail}</span></p>):<p>لا توجد وقائع مسجلة بعد.</p>}</div></details>)}{!filtered.length?<p className="subtle-empty">لا توجد ملفات تطابق البحث. جرّب اسمًا آخر أو غيّر الحالة.</p>:null}{filtered.length>limit?<button onClick={()=>setLimit(n=>n+30)}>عرض المزيد من الأفراد</button>:null}</div>;
+}
