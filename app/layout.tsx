@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
-import './globals.css';
+import globalStyles from './globals.css?inline';
+import workspaceStyles from './console/workspace.css?inline';
 export const metadata:Metadata={metadataBase:new URL('https://mercurius-scout-platform.flashtour-4833.chatgpt.site'),title:'مرقوريوس | منصة إدارة المجموعات الكشفية',description:'خطط وأعضاء وأرشيف ومالية مترابطة للمجموعات الكشفية في الكنائس. تعرّف على مرقوريوس واطلب تجربة لمجموعتك.',manifest:'/scout.webmanifest',icons:{icon:'/favicon.svg'},openGraph:{title:'مرقوريوس | كل تفاصيل مجموعتك، على خطة واحدة',description:'منصة عربية تربط الخطة والتنفيذ برحلة الفرد.',locale:'ar_EG',type:'website'}};
-export default function RootLayout({children}:Readonly<{children:React.ReactNode}>){return <html lang="ar" dir="rtl"><head><link rel="preload" href="/assets/cairo-arabic.woff2" as="font" type="font/woff2" crossOrigin="anonymous"/></head><body>{children}</body></html>}
+export default function RootLayout({children}:Readonly<{children:React.ReactNode}>){return <html lang="ar" dir="rtl"><head><style id="scout-base-styles" dangerouslySetInnerHTML={{__html:globalStyles+'\n'+workspaceStyles}}/><link rel="preload" href="/assets/cairo-arabic.woff2" as="font" type="font/woff2" crossOrigin="anonymous"/></head><body>{children}</body></html>}
