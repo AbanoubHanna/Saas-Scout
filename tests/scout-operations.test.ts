@@ -25,3 +25,9 @@ test('promotion updates stage only after every signature and rechecks current el
  changed=structuredClone(s);changed.members[0].profile!.birthDate='2020-01-01';assert.throws(()=>apply(changed,'operation.decide',{requestId,role:'general_leader',approved:true}));
  s=apply(s,'operation.decide',{requestId,role:'general_leader',approved:true});assert.equal(s.members[0].stage,'جوال');assert.equal(s.members[0].timeline.filter(t=>t.type==='promotion').length,1);assert.throws(()=>apply(s,'achievement.request',payload));
 });
+test('revoking a previous curriculum signer prevents completion and preserves pending decisions',()=>{
+ let s=approvedCurriculum(setup());const old=s.operations!.curricula[0];s=apply(s,'curriculum.create',{name:old.name,stage:old.stage,previousId:old.id});const v=s.operations!.curricula.at(-1)!;s=apply(s,'curriculum.submit',{curriculumId:v.id,'approver:general_leader':'chief','approver:priest':'father','approver:curriculum_leader':'curricula','approver:sector_leader':'sector'});const requestId=s.operations!.approvals.at(-1)!.id;
+ for(const[userId,role]of [['father','priest'],['chief','general_leader'],['sector','sector_leader']])s=apply(s,'operation.decide',{requestId,role,approved:true},userId);
+ s=apply(s,'assignment.revoke',{userId:'father',role:'priest'});assert.throws(()=>apply(s,'operation.decide',{requestId,role:'curriculum_leader',approved:true},'curricula'));assert.equal(s.operations!.curricula.at(-1)!.status,'review');assert.equal(s.operations!.approvals.at(-1)!.decisions.length,3);
+ s=apply(s,'operation.decide',{requestId,role:'curriculum_leader',approved:false},'curricula');assert.equal(s.operations!.curricula.at(-1)!.status,'rejected');assert.equal(s.operations!.curricula[0].status,'approved');
+});
