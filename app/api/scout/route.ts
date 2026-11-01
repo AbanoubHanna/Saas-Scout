@@ -1,6 +1,7 @@
 import {getScoutUser as getChatGPTUser,assertTestScope} from '../../../lib/scout/scout-auth';
 import {supportProjection} from '../../../lib/scout/governance';
 import {loadGroupState,saveGroupState,fingerprint} from '../../../lib/scout/storage';
+import {addMonth,subscriptionLifecycle} from '../../../lib/scout/subscriptions';
 import {isPlatformOperator as operator} from '../../../lib/scout/server-auth';
 import { and, eq, sql } from 'drizzle-orm';
 import { getDb } from '../../../db';
@@ -30,8 +31,8 @@ export async function GET(request: Request) {
             throw new DomainError('المجموعة غير موجودة', 404);
         const state = await loadGroupState(row);assertTestScope(user,state);
         if (!state.assignments.some(a => a.userId === user.userId)){if(!isOperator)throw new DomainError('ليس لك وصول لهذه المجموعة',403);const support=supportProjection(state,user.userId,new Date().toISOString());for(const grant of support.grants)await db.insert(scoutSupportLog).values({id:crypto.randomUUID(),groupId,grantId:grant.id,operatorId:user.userId,scope:grant.scope,at:new Date().toISOString()});return response({support});}
-        const [subscription]=await db.select().from(scoutSubscriptions).where(eq(scoutSubscriptions.groupId,groupId)).limit(1);if(subscription?.status==='suspended')throw new DomainError('مساحة المجموعة موقوفة؛ تواصل مع مفوض الاشتراك',403);
-        if(new URL(request.url).searchParams.get('view')==='offline'){const actor={userId:user.userId};const meetings=state.meetings.filter(m=>{const p=state.plans.find(p=>p.id===m.planId);return p&&can(state,actor,'meeting.record',p.unit);});if(!meetings.length)throw new DomainError('لا توجد اجتماعات مصرح بها للحفظ دون اتصال',403);const units=meetings.map(m=>state.plans.find(p=>p.id===m.planId)!);const members=state.members.filter(m=>['active','trial','discussion'].includes(m.status)&&units.some(p=>p.scope==='general'||p.unit===m.team||(p.scope==='sector'&&p.unit!==null&&isWithinUnit(state,p.unit,m.team))));return response({pack:{id:user.userId+':'+state.id,userId:user.userId,groupId:state.id,name:state.name,revision:row.revision,expiresAt:new Date(Date.now()+86400000).toISOString(),members:members.map(m=>({id:m.id,name:m.name,team:m.team})),meetings:meetings.map(m=>({id:m.id,title:m.title,date:m.date,attendance:Object.fromEntries(Object.entries(m.attendance).filter(([id])=>members.some(x=>x.id===id))),assessments:Object.fromEntries(Object.entries(m.assessments).filter(([id])=>members.some(x=>x.id===id))),lessonId:state.operations?.items.find(i=>i.id===m.itemId)?.lessonId??null})),deliveries:state.operations?.deliveries.filter(d=>meetings.some(m=>m.id===d.meetingId))??[],assessments:state.operations?.assessments.filter(a=>members.some(m=>m.id===a.memberId)&&meetings.some(m=>m.id===a.meetingId))??[]}});}
+        const [subscription]=await db.select().from(scoutSubscriptions).where(eq(scoutSubscriptions.groupId,groupId)).limit(1);if(subscription&&subscriptionLifecycle(subscription).blocked)throw new DomainError('مساحة المجموعة موقوفة؛ تواصل مع مفوض الاشتراك',403);
+        if(new URL(request.url).searchParams.get('view')==='offline'){const actor={userId:user.userId};const meetings=state.meetings.filter(m=>{const p=state.plans.find(p=>p.id===m.planId);return p&&!m.details?.closedAt&&can(state,actor,'meeting.record',p.unit);});if(!meetings.length)throw new DomainError('لا توجد اجتماعات مصرح بها للحفظ دون اتصال',403);const units=meetings.map(m=>state.plans.find(p=>p.id===m.planId)!);const members=state.members.filter(m=>['active','trial','discussion'].includes(m.status)&&units.some(p=>p.scope==='general'||p.unit===m.team||(p.scope==='sector'&&p.unit!==null&&isWithinUnit(state,p.unit,m.team))));return response({pack:{id:user.userId+':'+state.id,userId:user.userId,groupId:state.id,name:state.name,revision:row.revision,expiresAt:new Date(Date.now()+86400000).toISOString(),members:members.map(m=>({id:m.id,name:m.name,team:m.team})),meetings:meetings.map(m=>({id:m.id,title:m.title,date:m.date,attendance:Object.fromEntries(Object.entries(m.attendance).filter(([id])=>members.some(x=>x.id===id))),assessments:Object.fromEntries(Object.entries(m.assessments).filter(([id])=>members.some(x=>x.id===id))),lessonId:state.operations?.items.find(i=>i.id===m.itemId)?.lessonId??null})),deliveries:state.operations?.deliveries.filter(d=>meetings.some(m=>m.id===d.meetingId))??[],assessments:state.operations?.assessments.filter(a=>members.some(m=>m.id===a.memberId)&&meetings.some(m=>m.id===a.meetingId))??[]}});}
         if (new URL(request.url).searchParams.get('view') === 'me')
             return response({ profile: individualProfile(state, { userId: user.userId }), revision: row.revision });
         const projected = projectGroup(state, { userId: user.userId });
@@ -69,7 +70,7 @@ export async function POST(request: Request) {
                 return response({ groupId: existing.id });
             const id = crypto.randomUUID();
             const state = createGroup(id, name, leaderId);state.accountNames={[leaderId]:leaderId===user.userId?user.displayName:trial.leaderName};
-            await db.batch([db.insert(scoutGroups).values({ id, name, trialRequestId: trialId, state: JSON.stringify(state), revision: 0, createdAt: new Date().toISOString() }), db.insert(groupAccounts).values({ id: crypto.randomUUID(), groupId: id, userId: leaderId, active: true })]);
+            await db.batch([db.insert(scoutGroups).values({ id, name, trialRequestId: trialId, state: JSON.stringify(state), revision: 0, createdAt: new Date().toISOString() }), db.insert(groupAccounts).values({ id: crypto.randomUUID(), groupId: id, userId: leaderId, active: true }),db.insert(scoutSubscriptions).values({groupId:id,status:'trial',startsOn:new Date().toISOString().slice(0,10),endsOn:addMonth(new Date().toISOString().slice(0,10)),billingMonths:1,amount:0,addons:'[]',updatedBy:user.userId,updatedAt:new Date().toISOString()})]);
             return response({ groupId: id }, 201);
         }
         const groupId = typeof input.groupId === 'string' ? input.groupId : '';
@@ -79,7 +80,7 @@ export async function POST(request: Request) {
         const [row] = await db.select().from(scoutGroups).where(eq(scoutGroups.id, groupId)).limit(1);
         if (!row)
             throw new DomainError('المجموعة غير موجودة', 404);
-        const [subscription]=await db.select().from(scoutSubscriptions).where(eq(scoutSubscriptions.groupId,groupId)).limit(1);if(subscription?.status==='suspended')throw new DomainError('المجموعة موقوفة',403);
+        const [subscription]=await db.select().from(scoutSubscriptions).where(eq(scoutSubscriptions.groupId,groupId)).limit(1);if(subscription&&subscriptionLifecycle(subscription).blocked)throw new DomainError('المجموعة موقوفة',403);
         const previous = await loadGroupState(row);assertTestScope(user,previous);
         const command = input.command as Command;
         if (!command || typeof command.type !== 'string' || !command.payload || typeof command.payload !== 'object' || Array.isArray(command.payload))
@@ -93,7 +94,7 @@ export async function POST(request: Request) {
             return response({ ok: true, revision: row.revision, replayed: true });
         if (revision !== row.revision)
             throw new DomainError('السجل اتعدل من مستخدم آخر. حدّث البيانات قبل المحاولة.', 409);
-        const savedRevision=await saveGroupState(row,next,command,user.userId,new Date().toISOString());
+        const savedRevision=await saveGroupState(row,next,command,user.userId,new Date().toISOString(),undefined,previous);
         return response({ok:true,revision:savedRevision});
     }
     catch (error) {

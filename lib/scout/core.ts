@@ -1,3 +1,8 @@
+import {applyAcademy,projectAcademy,individualExams,type Academy} from './academy.ts';
+import {applyCashReceipt,type CashReceipt} from './cash-receipts.ts';
+import {customCan,applyAccessRole,type AccessRole,type RoleBinding} from './access-roles.ts';
+import {applyImport,type ImportJob} from './imports.ts';
+import {applyWorkspace,projectWorkspace,assertOpenMeeting,validateProfile,type WorkspaceData,type ProfileData,type PlanBrief,type MeetingDetails} from './workspace-domain.ts';
 import {applyCashHandover,type CashHandover} from './finance-handover.ts';
 import {applyGovernance,type SupportGrant} from './governance.ts';
 import {applyDocuments,type Documents} from './documents.ts';
@@ -14,12 +19,13 @@ export type Actor = {
     userId: string;
 };
 export type Member = {
+    patrolId?:string;
     stage?:string;
     id: string;
     name: string;
-    profile?:{birthDate?:string;phone?:string;guardianName?:string;guardianPhone?:string;address?:string;education?:string};
+    profile?:ProfileData;
     team: string;
-    status: 'applicant' | 'trial' | 'active' | 'discussion' | 'rejected';
+    status: 'applicant' | 'trial' | 'active' | 'discussion' | 'rejected' | 'inactive' | 'graduated' | 'archived' | 'deceased';
     admission?: {
         role: 'general_leader' | 'priest';
         actor: string;
@@ -33,6 +39,7 @@ export type Member = {
     }[];
 };
 export type Plan = {
+    brief?:PlanBrief;
     id: string;
     title: string;
     scope: 'general' | 'sector' | 'team';
@@ -58,6 +65,7 @@ export type Plan = {
     }[];
 };
 export type Meeting = {
+    details?:MeetingDetails;
     itemId?:string;
     id: string;
     planId: string;
@@ -68,6 +76,7 @@ export type Meeting = {
     assessments: Record<string, 'passed' | 'not_passed'>;
 };
 export type Entry = {
+    receiptId?:string;category?:string;occurredOn?:string;
     itemId?:string;
     itemRootId?:string;
     id: string;
@@ -82,6 +91,12 @@ export type Entry = {
     actor: string;
 };
 export type GroupState = {
+    academy?:Academy;
+    receipts?:CashReceipt[];
+    accessRoles?:AccessRole[];
+    roleBindings?:RoleBinding[];
+    imports?:ImportJob[];
+    workspace?:WorkspaceData;
     cashHandovers?:CashHandover[];
     isTest?:boolean;
     testOwnerId?:string;
@@ -154,7 +169,7 @@ export type GroupState = {
         memberId: string;
         yearId: string;
         teamId: string;
-        status: 'applicant' | 'trial' | 'active' | 'discussion' | 'rejected';
+        status: 'applicant' | 'trial' | 'active' | 'discussion' | 'rejected' | 'inactive' | 'graduated' | 'archived' | 'deceased';
     }[];
     settings?: {
         planApproverRoles: Role[];
@@ -223,6 +238,7 @@ const money = (v: unknown) => {
 };
 export function createGroup(id: string, name: string, leaderId: string): GroupState { return { id, name, currency: 'EGP', assignments: [{ userId: leaderId, role: 'general_leader', unit: null }], members: [], plans: [], meetings: [], entries: [], audit: [], processed: [] }; }
 export function can(s: GroupState, a: Actor, permission: string, unit: string | null = null, at = new Date().toISOString()) {
+    if(customCan(s,a,permission,unit,at))return true;
     if (s.delegations?.some(d => d.userId === a.userId && !d.revokedAt && d.until > at && (d.unit === null || d.unit === unit) && d.permissions.includes(permission)))
         return true;
     const grants = s.assignments.filter(x => x.userId === a.userId);
@@ -242,6 +258,7 @@ export function runCommand(previous: GroupState, a: Actor, c: Command, at: strin
         throw new DomainError('ليس لك وصول لهذه المجموعة', 403);
     if (previous.processed.includes(c.id))
         return previous;
+    const nodes:unknown[]=[previous];while(nodes.length){const node=nodes.pop();if(node&&typeof node==='object'){if(!Array.isArray(node)&&(node as {id?:string}).id===c.id)throw new DomainError('معرّف العملية مستخدم لسجل قائم',409);for(const value of Object.values(node))if(value&&typeof value==='object')nodes.push(value);}}
     const s = structuredClone(previous), p = c.payload;
     const ensure = (permission: string, unit: string | null = null) => {
         if (!can(s, a, permission, unit, at))
@@ -384,7 +401,12 @@ export function runCommand(previous: GroupState, a: Actor, c: Command, at: strin
                 s.memberships ??= [];
                 s.memberships.push({ id: c.id, memberId: id, yearId, teamId: team, status: 'applicant' });
             }
-            s.members.push({ id, name, team, status: 'applicant', admission: [], timeline: [{ at, type: 'application_created', detail: 'إنشاء طلب انضمام' }] });
+            const profile=p.profile&&typeof p.profile==='object'&&!Array.isArray(p.profile)?validateProfile(p.profile as Record<string,unknown>,at):undefined;
+            if(profile?.nationalId&&s.members.some(x=>x.profile?.nationalId===profile.nationalId))throw new DomainError('رقم الهوية مسجل لفرد آخر');
+            const patrolId=typeof p.patrolId==='string'&&p.patrolId?p.patrolId:undefined;
+            if(patrolId&&!s.units?.some(x=>x.id===patrolId&&x.kind==='patrol'&&x.parentId===team))throw new DomainError('الطليعة لا تتبع الفريق');
+            s.members.push({ id, name, team, ...(profile?{profile}:{}),...(patrolId?{patrolId}:{}),status: 'applicant', admission: [], timeline: [{ at, type: 'application_created', detail: 'إنشاء طلب انضمام' }] });
+            if(p.familyId){if(!s.assignments.some(x=>x.userId===a.userId&&['general_leader','secretary'].includes(x.role)&&x.unit===null))throw new DomainError('ربط الأسرة للسكرتارية',403);const family=s.workspace?.families.find(x=>x.id===p.familyId);if(!family)throw new DomainError('الأسرة غير موجودة');s.workspace!.familyLinks.push({id:c.id,memberId:id,familyId:family.id,relation:'ابن / ابنة',at});}
             break;
         }
         case 'admission.start_trial': {
@@ -556,6 +578,7 @@ export function runCommand(previous: GroupState, a: Actor, c: Command, at: strin
                 throw new DomainError('الاجتماع غير موجود');
             const plan = findPlan(meeting.planId);
             ensure('meeting.record', plan.unit);
+            assertOpenMeeting(meeting);
             const member = s.members.find(x => x.id === text(p, 'memberId'));
             if (!member || !['trial', 'active', 'discussion'].includes(member.status) || (plan.scope === 'team' && member.team !== plan.unit)||(plan.scope==='sector'&&plan.unit!==null&&!isWithinUnit(s,plan.unit,member.team)))
                 throw new DomainError('الفرد خارج نطاق الاجتماع');
@@ -568,9 +591,7 @@ export function runCommand(previous: GroupState, a: Actor, c: Command, at: strin
                     throw new DomainError('لا يمكن إثبات تقييم غائب في هذا الاجتماع');
                 meeting.assessments[member.id] = p.assessment as 'passed' | 'not_passed';
             }
-            else
-                delete meeting.assessments[member.id];
-            meeting.executedAt = at;
+            else if(!['present','late'].includes(attendance)){if(s.operations?.assessments.some(x=>x.meetingId===meeting.id&&x.memberId===member.id&&x.result!=='not_evaluated'))throw new DomainError('راجع التقييم المسجل قبل تحويل الفرد إلى غائب');delete meeting.assessments[member.id];}
             member.timeline.push({ at, type: 'meeting_updated', detail: `${meeting.title}: ${attendance}${p.assessment ? ` / ${p.assessment}` : ''}` });
             break;
         }
@@ -651,6 +672,7 @@ export function runCommand(previous: GroupState, a: Actor, c: Command, at: strin
             ensure('finance.pay', box.unit);
             if (!item.required.every(r => item.decisions.some(d => d.userId === r.userId && d.role === r.role && d.approved)))
                 throw new DomainError('يلزم اعتماد المسؤول وأمين الصندوق معًا');
+            if(!item.required.every(r=>s.assignments.some(x=>x.userId===r.userId&&x.role===r.role&&x.unit===box.unit))||item.required.find(r=>r.role==='treasurer')?.userId!==box.treasurerId)throw new DomainError('تغير تكليف أحد المعتمدين؛ قدم طلبًا جديدًا قبل الدفع');
             if (cashBalance(s, box.id) < item.amount)
                 throw new DomainError('رصيد الصندوق غير كافٍ');
             s.entries.push({ id: c.id, kind: 'expense', boxId: box.id, planId: item.planId, title: item.title, amount: item.amount, at, actor: a.userId });
@@ -688,7 +710,7 @@ export function runCommand(previous: GroupState, a: Actor, c: Command, at: strin
             s.entries.push({ id: c.id, kind: 'expense',itemId,itemRootId, boxId, amount, planId: plan.id, title: text(p, 'title'), at, actor: a.userId });
             break;
         }
-        default: if(!applyCashHandover(s,a,c,at,ensure)&&!applyOperations(s,a,c,at,ensure)&&!applyPeopleEvents(s,a,c,at,ensure)&&!applyDocuments(s,a,c,at,ensure)&&!applyGovernance(s,a,c,at,ensure))throw new DomainError('الإجراء غير مدعوم');
+        default: if(!applyAcademy(s,a,c,at)&&!applyCashReceipt(s,a,c,at,ensure)&&!applyAccessRole(s,a,c,at,ensure)&&!applyImport(s,a,c,at,ensure)&&!applyWorkspace(s,a,c,at,ensure)&&!applyCashHandover(s,a,c,at,ensure)&&!applyOperations(s,a,c,at,ensure)&&!applyPeopleEvents(s,a,c,at,ensure)&&!applyDocuments(s,a,c,at,ensure)&&!applyGovernance(s,a,c,at,ensure))throw new DomainError('الإجراء غير مدعوم');
     }
     afterOperations(s,c);
     const announce = (users: string[], event: string, title: string, targetId: string) => { s.inbox ??= []; for (const userId of new Set(users)) {
@@ -755,13 +777,13 @@ export function projectGroup(s: GroupState, a: Actor): GroupState {
         throw new DomainError('ليس لك وصول لهذه المجموعة', 403);
     if (assigned.some(x => x.role === 'general_leader'))
         return { ...s, inbox: s.inbox?.filter(x => x.userId === a.userId), notificationPreferences: s.notificationPreferences?.filter(x => x.userId === a.userId) };
-    if (assigned.every(x => x.role === 'member'))
+    if (assigned.every(x => x.role === 'member')&&!s.roleBindings?.some(b=>b.userId===a.userId&&!b.revokedAt&&(!b.until||b.until>new Date().toISOString())&&s.accessRoles?.some(r=>r.id===b.roleId&&r.active)))
         throw new DomainError('واجهة الفرد متاحة في /me بعد ربط الحساب بالملف', 403);
     const roles = assigned.map(x => x.role), globalSecretary = assigned.some(x => x.role === 'secretary' && x.unit === null), priest = roles.includes('priest');
-    const globalFinance = assigned.some(x => x.role === 'treasurer' && x.unit === null);
+    const globalFinance = assigned.some(x => x.role === 'treasurer' && x.unit === null)||customCan(s,a,'finance.pay',null,new Date().toISOString())||customCan(s,a,'finance.donate',null,new Date().toISOString());
     const units = assigned.filter(x => ['team_leader', 'sector_leader','examiner'].includes(x.role)).map(x => x.unit);
     const operates=(unit:string|null)=>can(s,a,'meeting.record',unit)||can(s,a,'meeting.create',unit)||can(s,a,'plan.create',unit);
-    const financeScope = (unit: string | null) => assigned.some(x => x.role === 'treasurer' && (x.unit === null || x.unit === unit));
+    const financeScope = (unit: string | null) => assigned.some(x => x.role === 'treasurer' && (x.unit === null || x.unit === unit))||customCan(s,a,'finance.pay',unit,new Date().toISOString())||customCan(s,a,'finance.donate',unit,new Date().toISOString());
     const visibleBoxes = s.boxes?.filter(b => financeScope(b.unit) || operates(b.unit));
     const visibleBoxIds = new Set(s.boxes?.filter(b => financeScope(b.unit)).map(b => b.id) ?? []);
     if (globalFinance)
@@ -769,12 +791,12 @@ export function projectGroup(s: GroupState, a: Actor): GroupState {
     const plans = s.plans.filter(p => globalSecretary || priest || globalFinance || financeScope(p.unit) || operates(p.unit) || p.required.some(r => r.userId === a.userId) || (p.scope === 'general' && p.status === 'approved'));
     const meetings = s.meetings.filter(m => { const p = s.plans.find(p => p.id === m.planId); return p && operates(p.unit); });
     const members = s.members.filter(m => globalSecretary || priest || operates(m.team));
-    return {cashHandovers:s.cashHandovers?.filter(h=>[h.from,h.to,h.leaderId].includes(a.userId)).map(h=>({...h,snapshot:''})),isTest:s.isTest,accountNames:s.accountNames,documents:s.assignments.some(x=>x.userId===a.userId&&x.role==='secretary'&&x.unit===null)?s.documents:undefined,peopleEvents:projectPeopleEvents(s,a.userId,members.map(x=>x.id),plans.map(x=>x.id),globalFinance),operations:projectOperations(s,a), id: s.id, name: s.name, currency: s.currency, inbox: s.inbox?.filter(x => x.userId === a.userId), notificationPreferences: s.notificationPreferences?.filter(x => x.userId === a.userId), settings: s.settings, years: s.years, expenseRequests: s.expenseRequests?.filter(r => financeScope(s.boxes?.find(b => b.id === r.boxId)?.unit ?? null) || r.required.some(x => x.userId === a.userId)), boxes: visibleBoxes ?? [], memberships: s.memberships?.filter(m => members.some(person => person.id === m.memberId)), units: s.units?.filter(u => globalSecretary || priest || globalFinance || operates(u.id) || u.kind === 'sector'), plans, members: members.map(m => ({ ...m,profile:globalSecretary||assigned.some(x=>['team_leader','sector_leader'].includes(x.role)&&(x.unit===null||x.unit===m.team||(x.role==='sector_leader'&&isWithinUnit(s,x.unit!,m.team))))?m.profile:undefined, timeline: globalSecretary || assigned.some(x=>['team_leader','sector_leader'].includes(x.role)&&(x.unit===null||x.unit===m.team||(x.role==='sector_leader'&&isWithinUnit(s,x.unit!,m.team)))) ? m.timeline : [], admission: globalSecretary || priest ? m.admission : undefined })), meetings:meetings.map(m=>({...m,attendance:Object.fromEntries(Object.entries(m.attendance).filter(([id])=>members.some(x=>x.id===id))),assessments:Object.fromEntries(Object.entries(m.assessments).filter(([id])=>members.some(x=>x.id===id)))})), entries: globalFinance ? s.entries : s.entries.filter(e => e.kind === 'transfer' ? visibleBoxIds.has(e.fromBoxId ?? '') || visibleBoxIds.has(e.toBoxId ?? '') : visibleBoxIds.has(e.boxId ?? 'central')), assignments: s.assignments.filter(x => x.userId === a.userId || x.unit === null || units.includes(x.unit)), claims: globalSecretary ? s.claims : [], notifications: [], delegations: s.delegations?.filter(d => d.userId === a.userId), audit: s.audit.filter(x => x.actor === a.userId), processed: [] };
+    return {academy:projectAcademy(s,a),receipts:s.receipts?.filter(r=>financeScope(s.boxes?.find(b=>b.id===r.boxId)?.unit??null)),accessRoles:s.accessRoles,roleBindings:s.roleBindings?.filter(b=>b.userId===a.userId),imports:globalSecretary?s.imports:undefined,workspace:projectWorkspace(s,a),cashHandovers:s.cashHandovers?.filter(h=>[h.from,h.to,h.leaderId].includes(a.userId)).map(h=>({...h,snapshot:''})),isTest:s.isTest,accountNames:s.accountNames,documents:can(s,a,'document.issue')?s.documents:undefined,peopleEvents:projectPeopleEvents(s,a.userId,members.map(x=>x.id),plans.map(x=>x.id),globalFinance),operations:projectOperations(s,a), id: s.id, name: s.name, currency: s.currency, inbox: s.inbox?.filter(x => x.userId === a.userId), notificationPreferences: s.notificationPreferences?.filter(x => x.userId === a.userId), settings: s.settings, years: s.years, expenseRequests: s.expenseRequests?.filter(r => financeScope(s.boxes?.find(b => b.id === r.boxId)?.unit ?? null) || r.required.some(x => x.userId === a.userId)), boxes: visibleBoxes ?? [], memberships: s.memberships?.filter(m => members.some(person => person.id === m.memberId)), units: s.units?.filter(u => globalSecretary || priest || globalFinance || operates(u.id) || u.kind === 'sector'), plans, members: members.map(m => ({ ...m,profile:globalSecretary||assigned.some(x=>['team_leader','sector_leader'].includes(x.role)&&(x.unit===null||x.unit===m.team||(x.role==='sector_leader'&&isWithinUnit(s,x.unit!,m.team))))?m.profile:undefined, timeline: globalSecretary || assigned.some(x=>['team_leader','sector_leader'].includes(x.role)&&(x.unit===null||x.unit===m.team||(x.role==='sector_leader'&&isWithinUnit(s,x.unit!,m.team)))) ? m.timeline : [], admission: globalSecretary || priest ? m.admission : undefined })), meetings:meetings.map(m=>({...m,attendance:Object.fromEntries(Object.entries(m.attendance).filter(([id])=>members.some(x=>x.id===id))),assessments:Object.fromEntries(Object.entries(m.assessments).filter(([id])=>members.some(x=>x.id===id)))})), entries: globalFinance ? s.entries : s.entries.filter(e => e.kind === 'transfer' ? visibleBoxIds.has(e.fromBoxId ?? '') || visibleBoxIds.has(e.toBoxId ?? '') : visibleBoxIds.has(e.boxId ?? 'central')), assignments: s.assignments.filter(x => x.userId === a.userId || x.unit === null || units.includes(x.unit)), claims: globalSecretary ? s.claims : [], notifications: [], delegations: s.delegations?.filter(d => d.userId === a.userId), audit: s.audit.filter(x => x.actor === a.userId), processed: [] };
 }
 export function cashBalance(s: GroupState, boxId?: string): number { return s.entries.reduce((balance, e) => { if (e.kind === 'transfer')
     return boxId ? balance + (e.toBoxId === boxId ? e.amount : 0) - (e.fromBoxId === boxId ? e.amount : 0) : balance; if (boxId && (e.boxId ?? 'central') !== boxId)
     return balance; return balance + (['donation','event_fee'].includes(e.kind) ? e.amount : -e.amount); }, 0); }
 export function individualProfile(s: GroupState, a: Actor) { const binding = s.personAccounts?.find(x => x.userId === a.userId); const member = s.members.find(m => m.id === binding?.memberId); if (!binding || !member || !s.assignments.some(x => x.userId === a.userId))
-    throw new DomainError('حسابك غير مربوط بملف فرد في هذه المجموعة', 403); const visibleMember = {stage:member.stage,profile:member.profile, id: member.id, name: member.name, team: member.team, status: member.status, timeline: member.timeline.filter(t => t.type !== 'admission_decision') }; return { groupName: s.name, inbox: s.inbox?.filter(x => x.userId === a.userId) ?? [], member: visibleMember, plans: s.plans.filter(p => p.status === 'approved' && (p.scope === 'general' || (p.unit !== null && isWithinUnit(s, p.unit, member.team)))).map(p => ({ id: p.id, title: p.title, goal: p.goal })), meetings: s.meetings.filter(m => s.plans.some(p => p.id === m.planId && (p.scope === 'general' || (p.unit !== null && isWithinUnit(s, p.unit, member.team))))).map(m => ({ id: m.id, title: m.title, date: m.date, attendance: m.attendance[member.id] ?? null, assessment: meetingEvaluations(s,m)[member.id] ?? 'not_evaluated' })), claims: (s.claims ?? []).filter(c => c.memberId === member.id).map(c => ({ id: c.id, title: c.title, occurredAt: c.occurredAt, precision: c.precision, source: c.source, status: c.status, recordedAt: c.recordedAt })) }; }
+    throw new DomainError('حسابك غير مربوط بملف فرد في هذه المجموعة', 403); const visibleMember = {stage:member.stage,profile:member.profile, id: member.id, name: member.name, team: member.team, status: member.status, timeline: member.timeline.filter(t => t.type !== 'admission_decision') }; return { groupName: s.name, inbox: s.inbox?.filter(x => x.userId === a.userId) ?? [], member: visibleMember, plans: s.plans.filter(p => p.status === 'approved' && (p.scope === 'general' || (p.unit !== null && isWithinUnit(s, p.unit, member.team)))).map(p => ({ id: p.id, title: p.title, goal: p.goal })), meetings: s.meetings.filter(m => s.plans.some(p => p.id === m.planId && (p.scope === 'general' || (p.unit !== null && isWithinUnit(s, p.unit, member.team))))).map(m => ({ id: m.id, title: m.title, date: m.date, attendance: m.attendance[member.id] ?? null, assessment: meetingEvaluations(s,m)[member.id] ?? 'not_evaluated' })), exams:individualExams(s,member.id),memberships:(s.memberships??[]).filter(x=>x.memberId===member.id).map(x=>({...x,yearName:s.years?.find(y=>y.id===x.yearId)?.name??x.yearId,teamName:s.units?.find(u=>u.id===x.teamId)?.name??x.teamId})),learning:(s.operations?.curricula??[]).filter(c=>['approved','superseded'].includes(c.status)&&(c.unit===null||isWithinUnit(s,c.unit,member.team))).flatMap(c=>c.lessons.map(l=>({id:l.id,title:l.title,curriculum:c.name,part:l.part,required:l.required,result:s.operations?.assessments.filter(x=>x.memberId===member.id&&x.lessonId===l.id).at(-1)?.result??'not_evaluated'}))),achievements:(s.operations?.achievements??[]).filter(x=>x.memberId===member.id).map(x=>({id:x.id,title:x.title,kind:x.kind,status:x.status})),events:(s.peopleEvents?.registrations??[]).filter(r=>r.memberId===member.id).flatMap(r=>{const e=s.peopleEvents!.events.find(x=>x.id===r.eventId);if(!e)return [];const paid=s.peopleEvents!.payments.filter(p=>p.registrationId===r.id).reduce((n,p)=>n+(p.kind==='payment'?p.amount:-p.amount),0);const d=s.workspace?.eventDetails.find(x=>x.id===e.id);return [{id:e.id,title:e.title,status:e.status,fee:e.fee,paid,date:d?.date,location:d?.location,program:d?.program}];}),documents:(s.documents?.issued??[]).filter(d=>d.memberId===member.id).map(d=>({id:d.id,title:d.title,at:d.at,pdf:d.pdf})),claims: (s.claims ?? []).filter(c => c.memberId === member.id).map(c => ({ id: c.id, title: c.title, occurredAt: c.occurredAt, precision: c.precision, source: c.source, status: c.status, recordedAt: c.recordedAt })) }; }
 
 export function meetingEvaluations(s:GroupState,m:Meeting):Record<string,'passed'|'not_passed'|'not_evaluated'>{const item=s.operations?.items.find(i=>i.id===m.itemId);if(!item?.lessonId)return m.assessments;const values:Record<string,'passed'|'not_passed'|'not_evaluated'>={};for(const id of Object.keys(m.attendance))values[id]=s.operations?.assessments.filter(a=>a.meetingId===m.id&&a.memberId===id&&a.lessonId===item.lessonId).at(-1)?.result??'not_evaluated';return values;}

@@ -1,8 +1,3 @@
-import AppShell from "../app-shell";
-import {requireScoutUser as requireChatGPTUser} from '../../lib/scout/scout-auth';
-import MobileShell from '../mobile-shell';
-import { chatGPTSignOutPath } from '../chatgpt-auth';
-import Workspace from './workspace';
-import './workspace.css';
-export const dynamic = 'force-dynamic';
-export default async function Console() { const user = await requireChatGPTUser('/console'); return <AppShell section="group" name={user.displayName} signOut={chatGPTSignOutPath()}><MobileShell /><div className="workspace-notice">نسخة تجريبية للمراجعة. واتساب وتنبيهات الأجهزة والمدفوعات الإلكترونية غير متصلة.</div><Workspace /></AppShell>; }
+import AppShell from '../app-shell';import {requireScoutUser} from '../../lib/scout/scout-auth';import {chatGPTSignOutPath} from '../chatgpt-auth';import Hub from '../portal/hub';import MobileShell from '../mobile-shell';
+export const dynamic='force-dynamic';
+export default async function Page({searchParams}:{searchParams:Promise<{group?:string}>}){const{group=''}=await searchParams;const user=await requireScoutUser('/console');return <AppShell section="group" groupId={group} active="overview" name={user.displayName} signOut={chatGPTSignOutPath()}><MobileShell/><Hub group={group}/></AppShell>;}

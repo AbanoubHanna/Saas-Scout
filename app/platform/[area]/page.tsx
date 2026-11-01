@@ -1,0 +1,2 @@
+import AppShell from '../../app-shell';import {requireScoutUser} from '../../../lib/scout/scout-auth';import Panel from '../panel';
+export const dynamic='force-dynamic';export default async function Page({params}:{params:Promise<{area:string}>}){const{area}=await params;const user=await requireScoutUser('/platform/'+area);if(!['trials','groups','subscriptions','support'].includes(area))return <p>الصفحة غير متاحة</p>;return <AppShell section="platform" active={area} name={user.displayName}><Panel userId={user.userId} initialArea={area}/></AppShell>;}

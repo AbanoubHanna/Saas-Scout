@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import globalStyles from './globals.css?inline';
 import workspaceStyles from './console/workspace.css?inline';
+import portalStyles from './portal/portal.css?inline';
 export const metadata:Metadata={metadataBase:new URL('https://mercurius-scout-platform.flashtour-4833.chatgpt.site'),title:'Mercuri scout | منصة إدارة المجموعات الكشفية',description:'خطط وأعضاء وأرشيف ومالية مترابطة للمجموعات الكشفية في الكنائس. تعرّف على Mercuri scout واطلب تجربة لمجموعتك.',manifest:'/scout.webmanifest',icons:{icon:'/favicon.svg'},openGraph:{title:'Mercuri scout | كل تفاصيل مجموعتك، على خطة واحدة',description:'منصة عربية تربط الخطة والتنفيذ برحلة الفرد.',locale:'ar_EG',type:'website'}};
-export default function RootLayout({children}:Readonly<{children:React.ReactNode}>){return <html lang="ar" dir="rtl"><head><style id="scout-base-styles" dangerouslySetInnerHTML={{__html:globalStyles+'\n'+workspaceStyles}}/><link rel="preload" href="/assets/cairo-arabic.woff2" as="font" type="font/woff2" crossOrigin="anonymous"/></head><body>{children}</body></html>}
+export default function RootLayout({children}:Readonly<{children:React.ReactNode}>){return <html lang="ar" dir="rtl"><head><style id="scout-base-styles" dangerouslySetInnerHTML={{__html:globalStyles+'\n'+workspaceStyles+'\n'+portalStyles}}/><link rel="preload" href="/assets/cairo-arabic.woff2" as="font" type="font/woff2" crossOrigin="anonymous"/></head><body>{children}</body></html>}
